@@ -30,6 +30,9 @@ fn main() {
     let vertex = rspirv::dr::load_bytes(&vertex).unwrap();
     let fragment = rspirv::dr::load_bytes(&fragment).unwrap();
 
+    let (_, vertex_id_to_scalar, _) = collect_types(&vertex);
+    let (fragment_scalars, _, fragment_vectors) = collect_types(&fragment);
+
     let mut output = fragment.clone();
 
     let mut output_header = output.header.clone().unwrap();
@@ -52,25 +55,43 @@ fn main() {
             let mut pointer_inst = collected[&variable_inst.result_type.unwrap()].clone();
             let mut type_inst = collected[&pointer_inst.operands[1].unwrap_id_ref()].clone();
 
-            if type_inst.class.opcode == Op::TypeVector {
-                let mut scalar_inst = collected[&type_inst.operands[0].unwrap_id_ref()].clone();
+            let type_result_id = if let Some(type_result_id) =
+                inst_to_vector(&type_inst, &vertex_id_to_scalar)
+                    .and_then(|vector| fragment_vectors.get(&vector))
+            {
+                *type_result_id
+            } else {
+                if type_inst.class.opcode == Op::TypeVector {
+                    let mut scalar_inst = collected[&type_inst.operands[0].unwrap_id_ref()].clone();
 
-                let scalar_result_id = output_header.bound;
+                    let scalar_result_id = if let Some(scalar_result_id) =
+                        inst_to_scalar(&scalar_inst)
+                            .and_then(|scalar| fragment_scalars.get(&scalar))
+                    {
+                        *scalar_result_id
+                    } else {
+                        let scalar_result_id = output_header.bound;
+                        output_header.bound += 1;
+
+                        scalar_inst.result_id = Some(scalar_result_id);
+
+                        output.types_global_values.push(scalar_inst);
+
+                        scalar_result_id
+                    };
+
+                    type_inst.operands[0] = Operand::IdRef(scalar_result_id);
+                }
+
+                let type_result_id = output_header.bound;
                 output_header.bound += 1;
 
-                scalar_inst.result_id = Some(scalar_result_id);
+                type_inst.result_id = Some(type_result_id);
 
-                type_inst.operands[0] = Operand::IdRef(scalar_result_id);
+                output.types_global_values.push(type_inst);
 
-                output.types_global_values.push(scalar_inst);
-            }
-
-            let type_result_id = output_header.bound;
-            output_header.bound += 1;
-
-            type_inst.result_id = Some(type_result_id);
-
-            output.types_global_values.push(type_inst);
+                type_result_id
+            };
 
             let pointer_result_id = output_header.bound;
             output_header.bound += 1;
@@ -165,4 +186,51 @@ fn collect_location_to_inst(
     }
 
     location_to_inst
+}
+
+#[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
+enum Scalar {
+    Float(u32),
+}
+
+#[derive(Debug, Hash, PartialEq, Eq)]
+struct Vector(Scalar, u32);
+
+fn inst_to_scalar(inst: &Instruction) -> Option<Scalar> {
+    match inst.class.opcode {
+        Op::TypeFloat => Some(Scalar::Float(inst.operands[0].unwrap_literal_int32())),
+        _ => None,
+    }
+}
+
+fn inst_to_vector(inst: &Instruction, id_to_scalar: &HashMap<u32, Scalar>) -> Option<Vector> {
+    match inst.class.opcode {
+        Op::TypeVector => id_to_scalar
+            .get(&inst.operands[0].unwrap_id_ref())
+            .map(|scalar| Vector(*scalar, inst.operands[1].unwrap_literal_int32())),
+        _ => None,
+    }
+}
+
+fn collect_types(
+    module: &rspirv::dr::Module,
+) -> (
+    HashMap<Scalar, u32>,
+    HashMap<u32, Scalar>,
+    HashMap<Vector, u32>,
+) {
+    let mut scalar_to_id = HashMap::new();
+    let mut id_to_scalar = HashMap::new();
+    let mut vector_to_id = HashMap::new();
+
+    for inst in &module.types_global_values {
+        if let Some(scalar) = inst_to_scalar(inst) {
+            scalar_to_id.insert(scalar, inst.result_id.unwrap());
+            id_to_scalar.insert(inst.result_id.unwrap(), scalar);
+        } else if let Some(vector) = inst_to_vector(inst, &id_to_scalar) {
+            vector_to_id.insert(vector, inst.result_id.unwrap());
+        }
+    }
+
+    (scalar_to_id, id_to_scalar, vector_to_id)
 }
