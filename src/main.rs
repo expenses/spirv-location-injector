@@ -1,6 +1,6 @@
 use rspirv::dr::{Instruction, Operand};
 use rspirv::spirv::{Decoration, Op, StorageClass};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use structopt::StructOpt;
 
 #[derive(StructOpt)]
@@ -139,8 +139,8 @@ fn main() {
     std::fs::write(&opt.output, output).unwrap();
 }
 
-fn collect_globals(module: &rspirv::dr::Module) -> HashMap<u32, Instruction> {
-    let mut globals = HashMap::new();
+fn collect_globals(module: &rspirv::dr::Module) -> BTreeMap<u32, Instruction> {
+    let mut globals = BTreeMap::new();
 
     for inst in &module.types_global_values {
         if let Some(result_id) = inst.result_id {
@@ -151,8 +151,8 @@ fn collect_globals(module: &rspirv::dr::Module) -> HashMap<u32, Instruction> {
     globals
 }
 
-fn collect_locations(module: &rspirv::dr::Module) -> HashMap<u32, u32> {
-    let mut locations = HashMap::new();
+fn collect_locations(module: &rspirv::dr::Module) -> BTreeMap<u32, u32> {
+    let mut locations = BTreeMap::new();
 
     for inst in &module.annotations {
         if inst.class.opcode == Op::Decorate
@@ -170,10 +170,10 @@ fn collect_locations(module: &rspirv::dr::Module) -> HashMap<u32, u32> {
 
 fn collect_location_to_inst(
     module: &rspirv::dr::Module,
-    locations: &HashMap<u32, u32>,
+    locations: &BTreeMap<u32, u32>,
     class: StorageClass,
-) -> HashMap<u32, Instruction> {
-    let mut location_to_inst = HashMap::new();
+) -> BTreeMap<u32, Instruction> {
+    let mut location_to_inst = BTreeMap::new();
 
     for inst in &module.types_global_values {
         if inst.class.opcode == Op::Variable && inst.operands[0].unwrap_storage_class() == class {
@@ -188,12 +188,12 @@ fn collect_location_to_inst(
     location_to_inst
 }
 
-#[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy, PartialOrd, Ord)]
 enum Scalar {
     Float(u32),
 }
 
-#[derive(Debug, Hash, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct Vector(Scalar, u32);
 
 fn inst_to_scalar(inst: &Instruction) -> Option<Scalar> {
@@ -203,7 +203,7 @@ fn inst_to_scalar(inst: &Instruction) -> Option<Scalar> {
     }
 }
 
-fn inst_to_vector(inst: &Instruction, id_to_scalar: &HashMap<u32, Scalar>) -> Option<Vector> {
+fn inst_to_vector(inst: &Instruction, id_to_scalar: &BTreeMap<u32, Scalar>) -> Option<Vector> {
     match inst.class.opcode {
         Op::TypeVector => id_to_scalar
             .get(&inst.operands[0].unwrap_id_ref())
@@ -215,13 +215,13 @@ fn inst_to_vector(inst: &Instruction, id_to_scalar: &HashMap<u32, Scalar>) -> Op
 fn collect_types(
     module: &rspirv::dr::Module,
 ) -> (
-    HashMap<Scalar, u32>,
-    HashMap<u32, Scalar>,
-    HashMap<Vector, u32>,
+    BTreeMap<Scalar, u32>,
+    BTreeMap<u32, Scalar>,
+    BTreeMap<Vector, u32>,
 ) {
-    let mut scalar_to_id = HashMap::new();
-    let mut id_to_scalar = HashMap::new();
-    let mut vector_to_id = HashMap::new();
+    let mut scalar_to_id = BTreeMap::new();
+    let mut id_to_scalar = BTreeMap::new();
+    let mut vector_to_id = BTreeMap::new();
 
     for inst in &module.types_global_values {
         if let Some(scalar) = inst_to_scalar(inst) {
